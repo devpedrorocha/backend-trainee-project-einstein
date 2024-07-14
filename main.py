@@ -1,8 +1,8 @@
 import uuid
-from fastapi import FastAPI, UploadFile, File,HTTPException, Depends, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, status, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Annotated
+from typing import Annotated, List
 import models
 from database import engine, SessionLocal
 from sqlalchemy.orm import Session
@@ -10,23 +10,23 @@ import pandas as pd
 import traceback
 import tempfile
 from fastapi.middleware.cors import CORSMiddleware
-
-
-origins = [
-    "http://localhost",
-    "http://localhost:3000",  # Adjust this if your frontend runs on a different port
-    "http://127.0.0.1",
-    "http://127.0.0.1:3000",  # Adjust this if your frontend runs on a different port
-]
+import logging
 
 app = FastAPI()
+origins = [
+    "http://localhost",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 
+# Adicionar o middleware CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Allows specific origins
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],  # Permitir todos os métodos
+    allow_headers=["*"],  # Permitir todos os headers
 )
 
 
@@ -37,13 +37,14 @@ class UserBase(BaseModel):
     role: str
 
 class Report(BaseModel):
+    id: str
     name: str
-    date_test_executed: str
+    date_test_carried_out: str
 
 class GeneralQuestions(BaseModel):
+    id: str
     report_id: str
-    class_id: str
-    subject_id: str
+    number_question: int
     content: str
     correct_answer: str
     difficulty_level: str
@@ -55,6 +56,15 @@ class GeneralQuestions(BaseModel):
     selected_letter_c_quantity: int
     selected_letter_d_quantity: int
     selected_letter_e_quantity: int
+
+    class Config:
+        from_attributes = True
+
+class PaginatedResponse(BaseModel):
+    data: List[GeneralQuestions]
+    total: int
+    page: int
+    size: int
 
 def get_db():
     db = SessionLocal()
@@ -84,9 +94,9 @@ async def get_user(user_id: int, db: Session = db_dependency):
 
 
 @app.post('/reports/', status_code=status.HTTP_201_CREATED, response_model=Report)
-async def create_report(correctFile: UploadFile = File(...), studentFile: UploadFile = File(...), db: Session = db_dependency):
+async def create_report(reportName: str = Form(...), reportDate: str = '',correctFile: UploadFile = File(...), studentFile: UploadFile = File(...), db: Session = db_dependency):
     try:
-        # Read the CSV files into pandas dataframes
+        # Read XLSX files into pandas dataframes
         # with tempfile.NamedTemporaryFile(delete=False) as tmp_correct:
         #     tmp_correct.write(correctFile.file.read())
         #     correct_path = tmp_correct.name
@@ -97,18 +107,20 @@ async def create_report(correctFile: UploadFile = File(...), studentFile: Upload
 
         # correct_answers = pd.read_excel(correct_path)
         # student_answers = pd.read_excel(student_path)
+
+        # Read the CSV files into pandas dataframes
+
         correct_answers = pd.read_csv(correctFile.file)
         student_answers = pd.read_csv(studentFile.file)
-        print(correct_answers)
-        print(student_answers)
 
-        id = uuid.uuid4()
+        id = str(uuid.uuid4())
 
-        new_report = Report(
-            name="Report Name",  
-            id_class=id,
-            date_test_carried_out="2024-06-10" 
+        new_report = models.Reports(
+            name=reportName,  
+            id=id,
+            date_test_carried_out=reportDate
         )
+
         db.add(new_report)
         db.commit()
         db.refresh(new_report)  # Refresh to get the ID of the newly created report
@@ -150,36 +162,60 @@ async def create_report(correctFile: UploadFile = File(...), studentFile: Upload
                 acertaram_percent = erraram_percent = 0
 
             # Create a new GeneralQuestions object
-            new_question = GeneralQuestions(
-                report_id=new_report.id,
-                content=f"Question {coluna - 2}",
-                correct_answer=gabaritoC,
-                difficulty_level="Easy",  # Adjust this as needed
-                analysis_description="",
-                selected_correct_answer_quantity=acertaram,
-                selected_wrong_answer_quantity=erraram,
-                selected_letter_a_quantity=a,
-                selected_letter_b_quantity=b,
-                selected_letter_c_quantity=c,
-                selected_letter_d_quantity=d,
-                selected_letter_e_quantity=e
-            )
-            db.add(new_question)
-            
-            print(f'Questão:{coluna-2} Disciplina:{disciplina} Gabarito: {gabaritoC}\n A: {a}\n B: {b}\n C: {c}\n D: {d}\n E: {e} ')
-            print(erraram, acertaram)
-            db
-        # Return a response (you can customize the response as needed)
-        return JSONResponse(content={"message": "Report created successfully"}, status_code=201)
-    
-    except Exception as e:
-        print(f'Error occurred: {e}')
-        traceback.print_exc()
-        raise HTTPException(status_code=400, detail=str(e))
+            try:
+                new_question = models.GeneralQuestions(
+                    id=str(uuid.uuid4()),  # Generate a unique ID for each question
+                    report_id=new_report.id,
+                    number_question=coluna - 2,
+                    content="Conteúdo",
+                    # subject_id=disciplina,
+                    correct_answer=gabaritoC,
+                    difficulty_level="Easy",  # Adjust as necessary
+                    analysis_description="",
+                    selected_correct_answer_quantity=acertaram,
+                    selected_wrong_answer_quantity=erraram,
+                    selected_letter_a_quantity=a,
+                    selected_letter_b_quantity=b,
+                    selected_letter_c_quantity=c,
+                    selected_letter_d_quantity=d,
+                    selected_letter_e_quantity=e
+                )
+                db.add(new_question)
+                logging.info(f'Added new question: {new_question}')
+                print(f'Questão:{coluna-2} Disciplina:{disciplina} Gabarito: {gabaritoC}\n A: {a}\n B: {b}\n C: {c}\n D: {d}\n E: {e} ')
+                print(erraram, acertaram)
+            except Exception as e:
+                logging.error(f'Error adding new question: {e}')
+                raise
 
-@app.get('/reports/{report.id}', status_code=status.HTTP_200_OK, response_model=Report)
-async def get_report(report_id: int, db: Session = db_dependency):
-    report = db.query(models.Reports).filter(models.Reports.id == report_id).first()
-    if not report:
+           
+        try:
+            db.commit()  # Commit após adicionar todas as questões
+            logging.info(f'Commit new question: {new_question}')
+
+        except Exception as e:
+                logging.error(f'Error adding Commit question: {e}')
+                raise
+
+        return JSONResponse(content={"message": "Report created successfully"}, status_code=201)
+    except Exception as e:
+        db.rollback()  # Reverte a transação em caso de erro
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()  # Fecha a sessão do banco de dados
+    
+
+@app.get('/reports', status_code=status.HTTP_200_OK, response_model=list[Report])
+async def get_reports(db: Session = db_dependency):
+    reports = db.query(models.Reports).all()
+    return reports
+
+@app.get('/reports/{report_id}', status_code=status.HTTP_200_OK, response_model=List[GeneralQuestions])
+async def get_report(report_id: str, page: int = Query(1, ge=1), size: int = Query(10, ge=1), db: Session = Depends(get_db)):
+    total = db.query(models.GeneralQuestions).filter(models.GeneralQuestions.report_id == report_id).all()
+    
+    
+    if not total:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Relatório não encontrado')
-    return report
+    
+    return total
